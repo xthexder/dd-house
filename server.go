@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"compress/zlib"
 	"flag"
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"strconv"
 )
@@ -39,11 +42,26 @@ func handleIntake(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Println(req.Method, req.URL.String())
-	buf := make([]byte, 64*1024)
-	io.ReadFull(req.Body, buf)
-	log.Println(string(buf))
-	io.WriteString(w, "AgentHandler is running")
+	dump, _ := httputil.DumpRequest(req, false)
+	log.Println(string(dump))
+
+	body := req.Body
+	if req.Header.Get("Content-Encoding") == "deflate" {
+		var err error
+		body, err = zlib.NewReader(body)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+	buf := bytes.NewBuffer([]byte{})
+	_, err := io.Copy(buf, body)
+	if err != nil {
+		log.Println(err)
+	} else {
+		log.Println(buf.String())
+	}
+
+	io.WriteString(w, `{"status":"ok"}`)
 }
 
 func handleApi(w http.ResponseWriter, req *http.Request) {
@@ -51,10 +69,25 @@ func handleApi(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Println(req.Method, req.URL.String())
-	buf := make([]byte, 64*1024)
-	io.ReadFull(req.Body, buf)
-	log.Println(string(buf))
+	dump, _ := httputil.DumpRequest(req, false)
+	log.Println(string(dump))
+
+	body := req.Body
+	if req.Header.Get("Content-Encoding") == "deflate" {
+		var err error
+		body, err = zlib.NewReader(body)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+	buf := bytes.NewBuffer([]byte{})
+	_, err := io.Copy(buf, body)
+	if err != nil {
+		log.Println(err)
+	} else {
+		log.Println(buf.String())
+	}
+
 	io.WriteString(w, "hello, world!\n")
 
 }
