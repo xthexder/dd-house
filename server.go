@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -37,33 +39,6 @@ func handleApiKey(w http.ResponseWriter, req *http.Request) bool {
 	return false
 }
 
-func handleIntake(w http.ResponseWriter, req *http.Request) {
-	if handleApiKey(w, req) {
-		return
-	}
-
-	dump, _ := httputil.DumpRequest(req, false)
-	log.Println(string(dump))
-
-	body := req.Body
-	if req.Header.Get("Content-Encoding") == "deflate" {
-		var err error
-		body, err = zlib.NewReader(body)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-	buf := bytes.NewBuffer([]byte{})
-	_, err := io.Copy(buf, body)
-	if err != nil {
-		log.Println(err)
-	} else {
-		log.Println(buf.String())
-	}
-
-	io.WriteString(w, `{"status":"ok"}`)
-}
-
 func handleApi(w http.ResponseWriter, req *http.Request) {
 	if handleApiKey(w, req) {
 		return
@@ -78,18 +53,81 @@ func handleApi(w http.ResponseWriter, req *http.Request) {
 		body, err = zlib.NewReader(body)
 		if err != nil {
 			log.Println(err)
+			io.WriteString(w, `{"status":"failed"}`)
+			return
 		}
 	}
 	buf := bytes.NewBuffer([]byte{})
 	_, err := io.Copy(buf, body)
 	if err != nil {
 		log.Println(err)
+		io.WriteString(w, `{"status":"failed"}`)
+		return
 	} else {
 		log.Println(buf.String())
 	}
 
-	io.WriteString(w, "hello, world!\n")
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, `{"status":"ok"}`)
+}
 
+func handleIntake(w http.ResponseWriter, req *http.Request) {
+	if handleApiKey(w, req) {
+		return
+	}
+
+	dump, _ := httputil.DumpRequest(req, false)
+	log.Println(string(dump))
+
+	body := req.Body
+	if req.Header.Get("Content-Encoding") == "deflate" {
+		var err error
+		body, err = zlib.NewReader(body)
+		if err != nil {
+			log.Println(err)
+			io.WriteString(w, `{"status":"failed"}`)
+			return
+		}
+	}
+	buf := bytes.NewBuffer([]byte{})
+	_, err := io.Copy(buf, body)
+	if err != nil {
+		log.Println(err)
+		io.WriteString(w, `{"status":"failed"}`)
+		return
+	}
+
+	data := make(map[string]interface{})
+	err = json.Unmarshal(buf.Bytes(), &data)
+	if err != nil {
+		log.Println(err)
+		io.WriteString(w, `{"status":"failed"}`)
+		return
+	}
+
+	for key, _ := range data {
+		fmt.Println(key)
+	}
+
+	host := data["internalHostname"].(string)
+	go pushStat(host, "system.load.1", data["system.load.1"].(float64))
+	go pushStat(host, "system.load.5", data["system.load.5"].(float64))
+	go pushStat(host, "system.load.15", data["system.load.15"].(float64))
+
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, `{"status":"ok"}`)
+}
+
+func pushStat(host, key string, value float64) {
+	log.Printf("[%s] %s: %f", host, key, value)
+
+	body := bytes.NewBufferString(`[{"name" : "` + key + `","columns" : ["value", "host"],"points" : [[` + strconv.FormatFloat(value, 'f', 4, 64) + `, "` + host + `"]]}]`)
+	resp, err := http.Post("http://localhost:8086/db/datadog/series?u=root&p=root", "application/json", body)
+	if err != nil {
+		log.Println(err)
+	} else {
+		log.Println(resp)
+	}
 }
 
 func main() {
