@@ -1,12 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 )
@@ -14,16 +12,16 @@ import (
 var port = flag.Int("port", 8080, "which port to listen on")
 var authApiKey string
 
-func handleApiKey(w http.ResponseWriter, req *http.Request) (string, url.Values) {
+func handleApiKey(w http.ResponseWriter, req *http.Request) bool {
 	if req.UserAgent() == "Datadog-Status-Check" {
 		io.WriteString(w, "Hello\n")
-		return "", nil
+		return true
 	}
 	err := req.ParseForm()
 	if err != nil {
 		log.Println("Error parsing form:", err)
 		http.Error(w, err.Error(), 500)
-		return "", nil
+		return true
 	}
 	values := req.Form
 	api_key := values.Get("api_key")
@@ -31,40 +29,32 @@ func handleApiKey(w http.ResponseWriter, req *http.Request) (string, url.Values)
 	if len(authApiKey) > 0 && api_key != authApiKey {
 		log.Println("Got bad API key:", api_key)
 		http.Error(w, "Bad API Key", 403)
-		return "", nil
+		return true
 	}
-	return api_key, values
+	return false
 }
 
 func handleIntake(w http.ResponseWriter, req *http.Request) {
-	api_key, values := handleApiKey(w, req)
-	if values == nil {
+	if handleApiKey(w, req) {
 		return
 	}
 
-	data, err := json.Marshal(values)
-	if err != nil {
-		log.Println("Failed to marshal json:", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	log.Println(req.Method, req.Host, req.URL.Path, api_key, string(data))
-	io.WriteString(w, "hello, world!\n")
+	log.Println(req.Method, req.URL.String())
+	buf := make([]byte, 64*1024)
+	io.ReadFull(req.Body, buf)
+	log.Println(string(buf))
+	io.WriteString(w, "AgentHandler is running")
 }
 
 func handleApi(w http.ResponseWriter, req *http.Request) {
-	api_key, values := handleApiKey(w, req)
-	if values == nil {
+	if handleApiKey(w, req) {
 		return
 	}
 
-	data, err := json.Marshal(values)
-	if err != nil {
-		log.Println("Failed to marshal json:", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	log.Println(req.Method, req.Host, req.URL.Path, api_key, string(data))
+	log.Println(req.Method, req.URL.String())
+	buf := make([]byte, 64*1024)
+	io.ReadFull(req.Body, buf)
+	log.Println(string(buf))
 	io.WriteString(w, "hello, world!\n")
 
 }
@@ -76,7 +66,7 @@ func main() {
 		log.Println("Warning: API_KEY is blank")
 	}
 
-	log.Println("dd-house listening on ", *port)
+	log.Println("dd-house listening on", *port)
 
 	http.HandleFunc("/intake", handleIntake)
 	http.HandleFunc("/api/v1/series/", handleApi)
