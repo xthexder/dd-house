@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 )
 
 var port = flag.Int("port", 8080, "which port to listen on")
@@ -52,13 +53,33 @@ type Metric struct {
 	Points  [][]interface{} `json:"points"`
 }
 
-func NewMetric(host, name string, timestamp, value interface{}, tags map[string]string) *Metric {
+func NewMetric(host, name string, timestamp uint64, value interface{}, tags map[string]string) *Metric {
 	columns := []string{"time", "value", "hostname"}
 	points := [][]interface{}{{timestamp, value, host}}
 	if tags != nil {
 		for k, v := range tags {
 			if k == "hostname" {
 				points[0][2] = v
+			} else {
+				columns = append(columns, k)
+				points[0] = append(points[0], v)
+			}
+		}
+	}
+	return &Metric{name, columns, points}
+}
+
+func NewMetricGroup(host, name string, timestamp uint64, values map[string]interface{}, tags map[string]string) *Metric {
+	columns := []string{"time", "hostname"}
+	points := [][]interface{}{{timestamp, host}}
+	for k, v := range values {
+		columns = append(columns, k)
+		points[0] = append(points[0], v)
+	}
+	if tags != nil {
+		for k, v := range tags {
+			if k == "hostname" {
+				points[0][1] = v
 			} else {
 				columns = append(columns, k)
 				points[0] = append(points[0], v)
@@ -95,14 +116,26 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	host := data["internalHostname"].(string)
 	timestamp := data["collection_timestamp"].(float64)
 
+	values := make(map[string]map[string]interface{})
+
 	fmt.Printf("Unmapped metrics (%s):\n", host)
 	for key, value := range data {
 		name, ok := rootMetrics[key]
 		if ok {
-			metrics = append(metrics, NewMetric(host, name, uint64(timestamp*1000), value, nil))
+			index := strings.LastIndexAny(name, ".")
+			group_name := name[:index]
+			group := values[group_name]
+			if group == nil {
+				group = make(map[string]interface{})
+				values[group_name] = group
+			}
+			group[name[index+1:]] = value
 		} else {
 			fmt.Println(key)
 		}
+	}
+	for name, group := range values {
+		metrics = append(metrics, NewMetricGroup(host, name, uint64(timestamp*1000), group, nil))
 	}
 	return metrics
 }
