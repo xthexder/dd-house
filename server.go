@@ -5,7 +5,6 @@ import (
 	"compress/zlib"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -93,7 +92,7 @@ func PushMetrics(metrics []*Metric) {
 	if len(metrics) == 0 {
 		return
 	}
-	log.Printf("Pushing %d metrics to InfluxDB", len(metrics))
+	log.Printf("Pushing %d metrics to InfluxDB\n", len(metrics))
 
 	body, err := json.Marshal(metrics)
 	if err != nil {
@@ -101,13 +100,11 @@ func PushMetrics(metrics []*Metric) {
 		return
 	}
 
-	log.Println(string(body))
-
 	resp, err := http.Post(dbUrl, "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		log.Println(err)
-	} else {
-		log.Println(resp)
+	} else if resp.StatusCode != 200 {
+		log.Println("Got Response: ", resp.Status)
 	}
 }
 
@@ -118,7 +115,7 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 
 	values := make(map[string]map[string]interface{})
 
-	fmt.Printf("Unmapped metrics (%s):\n", host)
+	log.Printf("Parsing metrics for: %s\n", host)
 	for key, value := range data {
 		name, ok := rootMetrics[key]
 		if ok {
@@ -131,7 +128,7 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 			}
 			group[name[index+1:]] = value
 		} else {
-			fmt.Println(key)
+			// fmt.Println(key)
 		}
 	}
 	for name, group := range values {
@@ -204,7 +201,7 @@ func handleApi(w http.ResponseWriter, req *http.Request) {
 		io.WriteString(w, `{"status":"failed"}`)
 		return
 	} else {
-		log.Println(buf.String())
+		// log.Println(buf.String())
 	}
 
 	w.Header().Set("Content-Type", "application/json")
