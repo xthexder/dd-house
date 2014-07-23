@@ -19,6 +19,11 @@ var authApiKey string
 var dbUrl string
 
 var rootMetrics = map[string]string{
+	"agentVersion": "host.agent_version",
+	"os":           "host.os",
+	"python":       "host.python_version",
+	"uuid":         "host.uuid",
+
 	"system.load.1":       "system.load.1",
 	"system.load.5":       "system.load.5",
 	"system.load.15":      "system.load.15",
@@ -45,6 +50,15 @@ var rootMetrics = map[string]string{
 	"memSwapTotal":   "system.swap.total",
 	"memSwapUsed":    "system.swap.used",
 	"memSwapPctFree": "system.swap.pct_free",
+}
+
+var diskMetrics = []string{
+	"device",
+	"total",
+	"used",
+	"free",
+	"in_use",
+	"mount",
 }
 
 type Metric struct {
@@ -112,8 +126,9 @@ func PushMetrics(metrics []*Metric) {
 func mapMetrics(data map[string]interface{}) []*Metric {
 	metrics := []*Metric{}
 	host := data["internalHostname"].(string)
-	timestamp := data["collection_timestamp"].(float64)
+	timestamp := uint64(data["collection_timestamp"].(float64) * 1000)
 
+	delete(data, "apiKey")
 	delete(data, "internalHostname")
 	delete(data, "collection_timestamp")
 
@@ -134,16 +149,31 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 			delete(data, key)
 		}
 	}
+	for name, group := range values {
+		metrics = append(metrics, NewMetricGroup(host, name, timestamp, group, nil))
+	}
+
+	metrics = append(metrics, mapDiskMetrics("system.disk", timestamp, host, data["diskUsage"].([]interface{})))
+	delete(data, "diskUsage")
+	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", timestamp, host, data["inodes"].([]interface{})))
+	delete(data, "inodes")
 
 	debug, err := json.MarshalIndent(data, "", "  ")
 	if err == nil {
 		fmt.Println(string(debug))
 	}
-
-	for name, group := range values {
-		metrics = append(metrics, NewMetricGroup(host, name, uint64(timestamp*1000), group, nil))
-	}
 	return metrics
+}
+
+func mapDiskMetrics(name string, timestamp uint64, host string, data []interface{}) *Metric {
+	columns := append([]string{"time", "hostname"}, diskMetrics...)
+	points := make([][]interface{}, len(data))
+	metric := &Metric{name, columns, points}
+	for i, disk := range data {
+		fields := disk.([]interface{})
+		points[i] = append([]interface{}{timestamp, host}, fields...)
+	}
+	return metric
 }
 
 func handleIntake(w http.ResponseWriter, req *http.Request) {
