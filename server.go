@@ -99,7 +99,7 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	for key, value := range data {
 		name, ok := rootMetrics[key]
 		if ok {
-			metrics = append(metrics, NewMetric(host, name, uint64(timestamp), value, nil))
+			metrics = append(metrics, NewMetric(host, name, uint64(timestamp*1000), value, nil))
 		} else {
 			fmt.Println(key)
 		}
