@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -113,6 +114,9 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	host := data["internalHostname"].(string)
 	timestamp := data["collection_timestamp"].(float64)
 
+	delete(data, "internalHostname")
+	delete(data, "collection_timestamp")
+
 	values := make(map[string]map[string]interface{})
 
 	log.Printf("Parsing metrics for: %s\n", host)
@@ -127,10 +131,15 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 				values[group_name] = group
 			}
 			group[name[index+1:]] = value
-		} else {
-			// fmt.Println(key)
+			delete(data, key)
 		}
 	}
+
+	debug, err := json.MarshalIndent(data, "", "  ")
+	if err == nil {
+		fmt.Println(string(debug))
+	}
+
 	for name, group := range values {
 		metrics = append(metrics, NewMetricGroup(host, name, uint64(timestamp*1000), group, nil))
 	}
