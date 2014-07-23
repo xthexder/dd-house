@@ -24,6 +24,26 @@ var rootMetrics = map[string]string{
 	"system.load.norm.1":  "system.load.norm.1",
 	"system.load.norm.5":  "system.load.norm.5",
 	"system.load.norm.15": "system.load.norm.15",
+
+	"cpuIdle":   "system.cpu.idle",
+	"cpuUser":   "system.cpu.user",
+	"cpuWait":   "system.cpu.iowait",
+	"cpuSystem": "system.cpu.system",
+	"cpuStolen": "system.cpu.stolen",
+
+	"memBuffers":       "system.mem.buffered",
+	"memPhysPctUsable": "system.mem.pct_usable",
+	"memShared":        "system.mem.shared",
+	"memPhysTotal":     "system.mem.total",
+	"memPhysUsable":    "system.mem.usable",
+	"memCached":        "system.mem.cached",
+	"memPhysUsed":      "system.mem.used",
+	"memPhysFree":      "system.mem.free",
+
+	"memSwapFree":    "system.swap.free",
+	"memSwapTotal":   "system.swap.total",
+	"memSwapUsed":    "system.swap.used",
+	"memSwapPctFree": "system.swap.pct_free",
 }
 
 type Metric struct {
@@ -75,7 +95,7 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	host := data["internalHostname"].(string)
 	timestamp := data["collection_timestamp"].(float64)
 
-	fmt.Printf("Unmapped metrics (%s):", host)
+	fmt.Printf("Unmapped metrics (%s):\n", host)
 	for key, value := range data {
 		name, ok := rootMetrics[key]
 		if ok {
