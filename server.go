@@ -171,6 +171,9 @@ func mapDiskMetrics(name string, timestamp uint64, host string, data []interface
 	metric := &Metric{name, columns, points}
 	for i, disk := range data {
 		fields := disk.([]interface{})
+		percent := fields[4].(string)
+		parse, _ := strconv.ParseFloat(percent[:len(percent)-1], 64)
+		fields[4] = parse / 100.0
 		points[i] = append([]interface{}{timestamp, host}, fields...)
 	}
 	return metric
@@ -240,7 +243,7 @@ func handleApi(w http.ResponseWriter, req *http.Request) {
 		io.WriteString(w, `{"status":"failed"}`)
 		return
 	} else {
-		// log.Println(buf.String())
+		log.Println(buf.String())
 	}
 
 	w.Header().Set("Content-Type", "application/json")
