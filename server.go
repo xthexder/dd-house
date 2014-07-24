@@ -16,14 +16,18 @@ import (
 )
 
 var port = flag.Int("port", 8080, "which port to listen on")
+var eventLogPath = flag.String("events", "events.log", "the file to log events to")
 var authApiKey string
 var dbUrl string
 
+var eventLog *os.File
+var eventsChan chan []byte
+
 var rootMetrics = map[string]string{
-	"agentVersion": "host.agent_version",
-	"os":           "host.os",
-	"python":       "host.python_version",
-	"uuid":         "host.uuid",
+	"agentVersion": "host.meta.agent_version",
+	"os":           "host.meta.os",
+	"python":       "host.meta.python_version",
+	"uuid":         "host.meta.uuid",
 
 	"system.load.1":       "system.load.1",
 	"system.load.5":       "system.load.5",
@@ -137,9 +141,10 @@ type StatsdMetric struct {
 	Type     string          `json:"type"`
 }
 
-func NewMetric(host, name string, timestamp uint64, value interface{}, tags map[string]string) *Metric {
+func NewMetric(host, name string, timestamp uint64, value interface{}, tags map[string]interface{}) *Metric {
 	columns := []string{"time", "value", "hostname"}
 	points := [][]interface{}{{timestamp, value, host}}
+
 	if tags != nil {
 		for k, v := range tags {
 			if k == "hostname" {
@@ -153,16 +158,19 @@ func NewMetric(host, name string, timestamp uint64, value interface{}, tags map[
 	return &Metric{name, columns, points}
 }
 
-func NewMetricGroup(host, name string, timestamp uint64, values map[string]interface{}, tags map[string]string) *Metric {
+func NewMetricGroup(host, name string, timestamp uint64, values map[string]interface{}, tags map[string]interface{}) *Metric {
 	columns := []string{"time", "hostname"}
 	points := [][]interface{}{{timestamp, host}}
-	for k, v := range values {
-		columns = append(columns, k)
-		points[0] = append(points[0], v)
+	if values != nil {
+		for k, v := range values {
+			columns = append(columns, k)
+			points[0] = append(points[0], v)
+		}
 	}
+
 	if tags != nil {
 		for k, v := range tags {
-			if k == "hostname" && len(v) > 0 {
+			if k == "hostname" {
 				points[0][1] = v
 			} else {
 				columns = append(columns, k)
@@ -206,20 +214,24 @@ func GroupMetric(name string) (string, string) {
 func mapStatsd(series []*StatsdMetric) []*Metric {
 	metrics := make([]*Metric, len(series))
 	host := ""
+
 	for i, metric := range series {
 		if len(metric.Host) > 0 {
 			host = metric.Host
 		}
+
 		columns := []string{"time", "value", "hostname"}
 		points := metric.Points
 		for i, _ := range points {
 			points[i][0] = uint64(points[i][0].(float64) * 1000)
 			points[i] = append(points[i], host)
 		}
+
 		columns = append(columns, "metric_interval", "metric_type")
 		for i, _ := range points {
 			points[i] = append(points[i], metric.Interval, metric.Type)
 		}
+
 		if metric.Tags != nil {
 			for _, tag := range metric.Tags {
 				split := strings.SplitN(tag, ":", 2)
@@ -237,6 +249,7 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 		}
 		metrics[i] = &Metric{"statsd." + metric.Metric, columns, points}
 	}
+
 	for _, metric := range metrics {
 		for _, points := range metric.Points {
 			if len(points[2].(string)) == 0 {
@@ -244,11 +257,11 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 			}
 		}
 	}
+
 	return metrics
 }
 
 func mapMetrics(data map[string]interface{}) []*Metric {
-	metrics := []*Metric{}
 	host := data["internalHostname"].(string)
 	timestamp := uint64(data["collection_timestamp"].(float64) * 1000)
 
@@ -256,6 +269,7 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	delete(data, "internalHostname")
 	delete(data, "collection_timestamp")
 
+	metrics := mapMetadata(host, timestamp, data)
 	values := make(map[string]map[string]interface{})
 
 	log.Printf("Parsing metrics for: %s\n", host)
@@ -276,8 +290,12 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 		metrics = append(metrics, NewMetricGroup(host, name, timestamp, group, nil))
 	}
 
+	parseEvents(data["events"].(map[string]interface{}))
+	delete(data, "events")
+
 	metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
 	delete(data, "processes")
+	delete(data, "resources") // Only ever contains process data that is already collected above
 	metrics = append(metrics, mapDiskMetrics("system.disk", timestamp, host, data["diskUsage"].([]interface{})))
 	delete(data, "diskUsage")
 	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", timestamp, host, data["inodes"].([]interface{})))
@@ -294,16 +312,58 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	return metrics
 }
 
+func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*Metric {
+	metrics := []*Metric{}
+	meta, ok := data["meta"]
+	if ok {
+		metrics = append(metrics, NewMetricGroup(host, "host.meta.hostnames", timestamp, nil, meta.(map[string]interface{})))
+
+		hostTags := data["host-tags"].(map[string]interface{})
+		for k, v := range hostTags {
+			tmp := v.([]interface{})
+			tags := make([]string, len(tmp))
+			for i, tag := range tmp {
+				tags[i] = tag.(string)
+			}
+			hostTags[k] = strings.Join(tags, ",")
+		}
+		metrics = append(metrics, NewMetricGroup(host, "host.meta.tags", timestamp, nil, hostTags))
+
+		systemStats := data["systemStats"].(map[string]interface{})
+		for k, v := range systemStats {
+			tmp, ok := v.([]interface{})
+			if ok {
+				parts := make([]string, len(tmp))
+				for i, part := range tmp {
+					parts[i] = part.(string)
+				}
+				systemStats[k] = strings.Join(parts, "-")
+			}
+		}
+		metrics = append(metrics, NewMetricGroup(host, "host.meta.stats", timestamp, systemStats, nil))
+
+		delete(data, "meta")
+		delete(data, "systemStats")
+	}
+	delete(data, "host-tags")
+
+	return metrics
+}
+
 func mapDiskMetrics(name string, timestamp uint64, host string, data []interface{}) *Metric {
 	columns := append([]string{"time", "hostname"}, diskMetrics...)
 	points := make([][]interface{}, len(data))
+
 	for i, disk := range data {
 		fields := disk.([]interface{})
+
 		percent := fields[4].(string)
 		parse, _ := strconv.ParseFloat(percent[:len(percent)-1], 64)
 		fields[4] = parse / 100.0
+
 		points[i] = append([]interface{}{timestamp, host}, fields...)
 	}
+
 	metric := &Metric{name, columns, points}
 	return metric
 }
@@ -311,16 +371,20 @@ func mapDiskMetrics(name string, timestamp uint64, host string, data []interface
 func mapIOMetrics(timestamp uint64, host string, data map[string]interface{}) *Metric {
 	columns := append([]string{"time", "hostname", "device"}, ioMetrics...)
 	points := [][]interface{}{}
+
 	for device, disk := range data {
 		fields := disk.(map[string]interface{})
+
 		values := make([]interface{}, len(ioMetrics))
 		for i, name := range ioMetrics {
 			value := fields[ioMetricMapping[name]]
 			parse, _ := strconv.ParseFloat(value.(string), 64)
 			values[i] = parse
 		}
+
 		points = append(points, append([]interface{}{timestamp, host, device}, values...))
 	}
+
 	metric := &Metric{"system.io", columns, points}
 	return metric
 }
@@ -341,13 +405,15 @@ func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
 	aggregate := make(map[string][]interface{})
 	for _, process := range processes {
 		fields := process.([]interface{})
-		command := fields[10].(string)
 		family := "kernel"
 		aggr := "kernel"
+
+		command := fields[10].(string)
 		if len(command) == 0 || command[0] != '[' {
 			family = GetProcessFamily(command)
 			aggr = command
 		}
+
 		result, ok := aggregate[aggr]
 		if !ok {
 			result = make([]interface{}, len(aggregateProcessMetrics))
@@ -365,6 +431,7 @@ func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
 		result[7] = command
 		result[8] = result[8].(int) + 1
 	}
+
 	columns := append([]string{"time", "hostname"}, aggregateProcessMetrics...)
 	points := [][]interface{}{}
 	for _, process := range aggregate {
@@ -376,8 +443,9 @@ func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
 
 func mapExtraMetrics(host string, data []interface{}) []*Metric {
 	values := make(map[string]map[string]interface{})
-	tags := make(map[string]map[string]string)
+	tags := make(map[string]map[string]interface{})
 	timestamps := make(map[string]uint64)
+
 	for _, tmp := range data {
 		metric := tmp.([]interface{})
 		name := metric[0].(string)
@@ -389,7 +457,7 @@ func mapExtraMetrics(host string, data []interface{}) []*Metric {
 		group_tags := tags[group_name]
 		if group == nil {
 			group = make(map[string]interface{})
-			group_tags = make(map[string]string)
+			group_tags = make(map[string]interface{})
 			values[group_name] = group
 			tags[group_name] = group_tags
 		}
@@ -409,11 +477,29 @@ func mapExtraMetrics(host string, data []interface{}) []*Metric {
 			}
 		}
 	}
+
 	metrics := []*Metric{}
 	for name, group := range values {
 		metrics = append(metrics, NewMetricGroup(host, name, timestamps[name], group, tags[name]))
 	}
 	return metrics
+}
+
+func parseEvents(data map[string]interface{}) {
+	for source, tmp := range data {
+		events := tmp.([]interface{})
+		for _, tmp2 := range events {
+			event := tmp2.(map[string]interface{})
+			event["source"] = source
+
+			buf, err := json.Marshal(event)
+			if err != nil {
+				log.Println("Failed to marshal event:", err)
+				continue
+			}
+			eventsChan <- buf
+		}
+	}
 }
 
 func handleIntake(w http.ResponseWriter, req *http.Request) {
@@ -518,6 +604,19 @@ func handleApiKey(w http.ResponseWriter, req *http.Request) bool {
 	return false
 }
 
+func writeEvents() {
+	defer func() {
+		eventLog.Close()
+	}()
+
+	for event := range eventsChan {
+		_, err := eventLog.Write(append(event, '\n'))
+		if err != nil {
+			log.Println("Failed to write event:", string(event), err)
+		}
+	}
+}
+
 func main() {
 	flag.Parse()
 	authApiKey = os.Getenv("API_KEY")
@@ -528,6 +627,14 @@ func main() {
 	if len(dbUrl) == 0 {
 		dbUrl = "http://localhost:8086/db/datadog/series?u=root&p=root"
 	}
+	var err error
+	eventLog, err = os.OpenFile(*eventLogPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		log.Panicln(err)
+	}
+	eventsChan = make(chan []byte, 5)
+
+	go writeEvents()
 
 	log.Println("dd-house listening on", *port)
 
