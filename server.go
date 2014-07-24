@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"strconv"
 	"strings"
@@ -59,6 +60,37 @@ var diskMetrics = []string{
 	"free",
 	"in_use",
 	"mount",
+}
+
+var ioMetrics = []string{
+	"util",
+	"avg_q_sz",
+	"avg_rq_sz",
+	"await",
+	"r_s",
+	"r_await",
+	"rkb_s",
+	"rrqm_s",
+	"svctm",
+	"w_s",
+	"w_await",
+	"wkb_s",
+	"wrqm_s",
+}
+var ioMetricMapping = map[string]string{
+	"util":      "%util",
+	"avg_q_sz":  "avgqu-sz",
+	"avg_rq_sz": "avgrq-sz",
+	"await":     "await",
+	"r_s":       "r/s",
+	"r_await":   "r_await",
+	"rkb_s":     "rkB/s",
+	"rrqm_s":    "rrqm/s",
+	"svctm":     "svctm",
+	"w_s":       "w/s",
+	"w_await":   "w_await",
+	"wkb_s":     "wkB/s",
+	"wrqm_s":    "wrqm/s",
 }
 
 type Metric struct {
@@ -132,7 +164,8 @@ func PushMetrics(metrics []*Metric) {
 	if err != nil {
 		log.Println(err)
 	} else if resp.StatusCode != 200 {
-		log.Println("Got Response: ", resp.Status)
+		dump, _ := httputil.DumpResponse(resp, true)
+		log.Printf("Got Response: %s\n%s\n\n\n%s", resp.Status, body, string(dump))
 	}
 }
 
@@ -214,6 +247,8 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	delete(data, "diskUsage")
 	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", timestamp, host, data["inodes"].([]interface{})))
 	delete(data, "inodes")
+	metrics = append(metrics, mapIOMetrics(timestamp, host, data["ioStats"].(map[string]interface{})))
+	// delete(data, "ioStats")
 	metrics = append(metrics, mapExtraMetrics(host, data["metrics"].([]interface{}))...)
 	delete(data, "metrics")
 
@@ -227,7 +262,6 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 func mapDiskMetrics(name string, timestamp uint64, host string, data []interface{}) *Metric {
 	columns := append([]string{"time", "hostname"}, diskMetrics...)
 	points := make([][]interface{}, len(data))
-	metric := &Metric{name, columns, points}
 	for i, disk := range data {
 		fields := disk.([]interface{})
 		percent := fields[4].(string)
@@ -235,6 +269,24 @@ func mapDiskMetrics(name string, timestamp uint64, host string, data []interface
 		fields[4] = parse / 100.0
 		points[i] = append([]interface{}{timestamp, host}, fields...)
 	}
+	metric := &Metric{name, columns, points}
+	return metric
+}
+
+func mapIOMetrics(timestamp uint64, host string, data map[string]interface{}) *Metric {
+	columns := append([]string{"time", "hostname", "device"}, ioMetrics...)
+	points := [][]interface{}{}
+	for device, disk := range data {
+		fields := disk.(map[string]interface{})
+		values := make([]interface{}, len(ioMetrics))
+		for i, name := range ioMetrics {
+			value := fields[ioMetricMapping[name]]
+			parse, _ := strconv.ParseFloat(value.(string), 64)
+			values[i] = parse
+		}
+		points = append(points, append([]interface{}{timestamp, host, device}, values...))
+	}
+	metric := &Metric{"system.io", columns, points}
 	return metric
 }
 
