@@ -148,6 +148,10 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 		for i, _ := range points {
 			points[i] = append(points[i], host)
 		}
+		columns = append(columns, "metric_interval", "metric_type")
+		for i, _ := range points {
+			points[i] = append(points[i], metric.Interval, metric.Type)
+		}
 		if metric.Tags != nil {
 			for _, tag := range metric.Tags {
 				split := strings.SplitN(tag, ":", 2)
