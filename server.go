@@ -389,10 +389,15 @@ func mapAgentChecks(host string, timestamp uint64, data []interface{}) []*Metric
 	metrics := []*Metric{}
 	for _, check := range data {
 		values := check.([]interface{})
-		name := "check." + values[1].(string) + "." + values[0].(string)
+		name := "check."
+		if values[1] == nil {
+			name += values[0].(string)
+		} else {
+			name += values[1].(string) + "." + values[0].(string)
+		}
 		new_values := make(map[string]interface{})
-		new_values["instance_id"] = values[2].(float64)
-		new_values["status"] = values[3].(string)
+		new_values["instance_id"] = values[2]
+		new_values["status"] = values[3]
 		message := ""
 		messages, ok := values[4].([]interface{})
 		if ok {
