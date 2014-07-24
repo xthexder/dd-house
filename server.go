@@ -53,6 +53,20 @@ var rootMetrics = map[string]string{
 	"memSwapPctFree": "system.swap.pct_free",
 }
 
+var processMetrics = []string{
+	"user",
+	"pid",
+	"pct_cpu",
+	"pct_mem",
+	"vsz",
+	"rss",
+	"tty",
+	"stat",
+	"started",
+	"running_time",
+	"command",
+}
+
 var diskMetrics = []string{
 	"device",
 	"total",
@@ -251,12 +265,14 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 		metrics = append(metrics, NewMetricGroup(host, name, timestamp, group, nil))
 	}
 
+	metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
+	delete(data, "processes")
 	metrics = append(metrics, mapDiskMetrics("system.disk", timestamp, host, data["diskUsage"].([]interface{})))
 	delete(data, "diskUsage")
 	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", timestamp, host, data["inodes"].([]interface{})))
 	delete(data, "inodes")
 	metrics = append(metrics, mapIOMetrics(timestamp, host, data["ioStats"].(map[string]interface{})))
-	// delete(data, "ioStats")
+	delete(data, "ioStats")
 	metrics = append(metrics, mapExtraMetrics(host, data["metrics"].([]interface{}))...)
 	delete(data, "metrics")
 
@@ -295,6 +311,38 @@ func mapIOMetrics(timestamp uint64, host string, data map[string]interface{}) *M
 		points = append(points, append([]interface{}{timestamp, host, device}, values...))
 	}
 	metric := &Metric{"system.io", columns, points}
+	return metric
+}
+
+func GetProcessFamily(command string) string {
+	if len(command) > 0 && command[0] == '[' {
+		return "kernel"
+	} else {
+		prefix := command
+		index := strings.IndexAny(command, " \t")
+		if index > 0 {
+			prefix = command[:index]
+		}
+		index = strings.LastIndex(prefix, "/")
+		return prefix[index+1:]
+	}
+}
+
+func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
+	host := data["host"].(string)
+	processes := data["processes"].([]interface{})
+	columns := append([]string{"time", "hostname", "family"}, processMetrics...)
+	points := make([][]interface{}, len(processes))
+	for i, process := range processes {
+		fields := process.([]interface{})
+		fields[1], _ = strconv.ParseInt(fields[1].(string), 10, 64)
+		fields[2], _ = strconv.ParseFloat(fields[2].(string), 64)
+		fields[3], _ = strconv.ParseFloat(fields[3].(string), 64)
+		fields[4], _ = strconv.ParseInt(fields[4].(string), 10, 64)
+		fields[5], _ = strconv.ParseInt(fields[5].(string), 10, 64)
+		points[i] = append([]interface{}{timestamp, host, GetProcessFamily(fields[10].(string))}, fields...)
+	}
+	metric := &Metric{"processes", columns, points}
 	return metric
 }
 
