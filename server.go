@@ -105,7 +105,7 @@ func NewMetricGroup(host, name string, timestamp uint64, values map[string]inter
 	}
 	if tags != nil {
 		for k, v := range tags {
-			if k == "hostname" {
+			if k == "hostname" && len(v) > 0 {
 				points[0][1] = v
 			} else {
 				columns = append(columns, k)
@@ -214,6 +214,8 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	delete(data, "diskUsage")
 	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", timestamp, host, data["inodes"].([]interface{})))
 	delete(data, "inodes")
+	metrics = append(metrics, mapExtraMetrics(host, data["metrics"].([]interface{}))...)
+	delete(data, "metrics")
 
 	debug, err := json.MarshalIndent(data, "", "  ")
 	if err == nil {
@@ -234,6 +236,28 @@ func mapDiskMetrics(name string, timestamp uint64, host string, data []interface
 		points[i] = append([]interface{}{timestamp, host}, fields...)
 	}
 	return metric
+}
+
+func mapExtraMetrics(host string, data []interface{}) []*Metric {
+	metrics := make([]*Metric, len(data))
+	for i, tmp := range data {
+		metric := tmp.([]interface{})
+		tags := make(map[string]string)
+		fields := metric[3].(map[string]interface{})
+		for k, v := range fields {
+			if k == "tags" {
+				tags2 := v.([]interface{})
+				for _, tag := range tags2 {
+					split := strings.SplitN(tag.(string), ":", 2)
+					tags[split[0]] = split[1]
+				}
+			} else {
+				tags[k] = v.(string)
+			}
+		}
+		metrics[i] = NewMetric(host, metric[0].(string), uint64(metric[1].(float64)*1000), metric[2], tags)
+	}
+	return metrics
 }
 
 func handleIntake(w http.ResponseWriter, req *http.Request) {
