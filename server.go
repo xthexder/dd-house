@@ -266,55 +266,67 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 
 func mapMetrics(data map[string]interface{}) []*Metric {
 	host := data["internalHostname"].(string)
-	timestamp := uint64(data["collection_timestamp"].(float64) * 1000)
+	log.Printf("Parsing metrics for: %s\n", host)
 
 	delete(data, "apiKey")
 	delete(data, "internalHostname")
-	delete(data, "collection_timestamp")
 
-	metrics := mapMetadata(host, timestamp, data)
-	values := make(map[string]map[string]interface{})
+	if data["events"] != nil {
+		parseEvents(data["events"].(map[string]interface{}))
+		delete(data, "events")
+	}
 
-	log.Printf("Parsing metrics for: %s\n", host)
-	for key, value := range data {
-		name, ok := rootMetrics[key]
-		if ok {
-			group_name, field_name := GroupMetric(name)
-			group := values[group_name]
-			if group == nil {
-				group = make(map[string]interface{})
-				values[group_name] = group
+	metrics := []*Metric{}
+	if data["collection_timestamp"] != nil {
+		timestamp := uint64(data["collection_timestamp"].(float64) * 1000)
+		delete(data, "collection_timestamp")
+
+		metrics = append(metrics, mapMetadata(host, timestamp, data)...)
+		values := make(map[string]map[string]interface{})
+
+		for key, value := range data {
+			name, ok := rootMetrics[key]
+			if ok {
+				group_name, field_name := GroupMetric(name)
+				group := values[group_name]
+				if group == nil {
+					group = make(map[string]interface{})
+					values[group_name] = group
+				}
+				group[field_name] = value
+				delete(data, key)
 			}
-			group[field_name] = value
-			delete(data, key)
 		}
-	}
-	for name, group := range values {
-		metrics = append(metrics, NewMetricGroup(host, name, timestamp, group, nil))
-	}
+		for name, group := range values {
+			metrics = append(metrics, NewMetricGroup(host, name, timestamp, group, nil))
+		}
 
-	parseEvents(data["events"].(map[string]interface{}))
-	delete(data, "events")
+		agentChecks, ok := data["agent_checks"]
+		if ok {
+			metrics = append(metrics, mapAgentChecks(host, timestamp, agentChecks.([]interface{}))...)
+			delete(data, "agent_checks")
+		}
 
-	agentChecks, ok := data["agent_checks"]
-	if ok {
-		metrics = append(metrics, mapAgentChecks(host, timestamp, agentChecks.([]interface{}))...)
-		delete(data, "agent_checks")
+		metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
+		delete(data, "processes")
+		delete(data, "resources") // Only ever contains process data that is already collected above
+		metrics = append(metrics, mapDiskMetrics("system.disk", host, timestamp, data["diskUsage"].([]interface{})))
+		delete(data, "diskUsage")
+		metrics = append(metrics, mapDiskMetrics("system.fs.inodes", host, timestamp, data["inodes"].([]interface{})))
+		delete(data, "inodes")
+		metrics = append(metrics, mapIOMetrics(host, timestamp, data["ioStats"].(map[string]interface{})))
+		delete(data, "ioStats")
+	} else {
+		delete(data, "uuid")
 	}
-
-	metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
-	delete(data, "processes")
-	delete(data, "resources") // Only ever contains process data that is already collected above
-	metrics = append(metrics, mapServiceChecks(data["service_checks"].([]interface{}))...)
-	delete(data, "service_checks")
-	metrics = append(metrics, mapDiskMetrics("system.disk", host, timestamp, data["diskUsage"].([]interface{})))
-	delete(data, "diskUsage")
-	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", host, timestamp, data["inodes"].([]interface{})))
-	delete(data, "inodes")
-	metrics = append(metrics, mapIOMetrics(host, timestamp, data["ioStats"].(map[string]interface{})))
-	delete(data, "ioStats")
-	metrics = append(metrics, mapExtraMetrics(host, data["metrics"].([]interface{}))...)
-	delete(data, "metrics")
+	if data["service_checks"] != nil {
+		metrics = append(metrics, mapServiceChecks(data["service_checks"].([]interface{}))...)
+		delete(data, "service_checks")
+	}
+	if data["metrics"] != nil {
+		metrics = append(metrics, mapExtraMetrics(host, data["metrics"].([]interface{}))...)
+		delete(data, "metrics")
+	}
 
 	if len(data) > 0 {
 		debug, err := json.MarshalIndent(data, "", "  ")
