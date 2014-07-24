@@ -20,6 +20,8 @@ var eventLogPath = flag.String("events", "events.log", "the file to log events t
 var processFilter = flag.Float64("ps-filter", 0.1, "only log processes using more than this % of a resource")
 var authApiKey string
 var dbUrl string
+var seriesUrl string
+var dbName string
 
 var eventLog *os.File
 var eventsChan chan []byte
@@ -194,7 +196,7 @@ func PushMetrics(metrics []*Metric) {
 		return
 	}
 
-	resp, err := http.Post(dbUrl, "application/json", bytes.NewBuffer(body))
+	resp, err := http.Post(seriesUrl, "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		log.Println(err)
 	} else if resp.StatusCode != 200 {
@@ -693,17 +695,72 @@ func writeEvents() {
 	}
 }
 
+func CreateDBIfNotExists() error {
+	log.Println("Checking if DB exists:", dbName)
+
+	resp, err := http.Get(dbUrl)
+	if err != nil {
+		return err
+	}
+
+	buf := bytes.NewBuffer([]byte{})
+	_, err = io.Copy(buf, resp.Body)
+	if err != nil {
+		return err
+	}
+	response := []map[string]string{}
+	err = json.Unmarshal(buf.Bytes(), &response)
+	if err != nil {
+		return err
+	}
+
+	for _, db := range response {
+		if db["name"] == dbName {
+			return nil
+		}
+	}
+
+	log.Printf("Creating DB: %s\n", dbName)
+
+	body, err := json.Marshal(map[string]string{"name": dbName})
+	if err != nil {
+		return err
+	}
+
+	resp, err = http.Post(dbUrl, "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	} else if resp.StatusCode != 201 {
+		dump, _ := httputil.DumpResponse(resp, true)
+		log.Printf("Got Response: %s\n%s\n\n\n%s", resp.Status, body, string(dump))
+	}
+
+	return nil
+}
+
 func main() {
 	flag.Parse()
 	authApiKey = os.Getenv("API_KEY")
 	if len(authApiKey) == 0 {
 		log.Println("Warning: API_KEY is blank")
 	}
-	dbUrl = os.Getenv("DB_URL")
-	if len(dbUrl) == 0 {
-		dbUrl = "http://localhost:8086/db/datadog/series?u=root&p=root"
+	inputUrl := os.Getenv("DB_URL")
+	if len(inputUrl) == 0 {
+		seriesUrl = "http://localhost:8086/db/datadog/series?u=root&p=root"
+		dbUrl = "http://localhost:8086/db?u=root&p=root"
+		dbName = "datadog"
+	} else {
+		split := strings.Split(inputUrl, "/")
+		split2 := strings.SplitN(split[4], "?", 2)
+		dbName = split2[0]
+		seriesUrl = strings.Join(split[0:4], "/") + "/" + dbName + "/series?" + split2[1]
+		dbUrl = strings.Join(split[0:4], "/") + "?" + split2[1]
 	}
-	var err error
+	err := CreateDBIfNotExists()
+	if err != nil {
+		log.Panicln(err)
+	}
+
 	eventLog, err = os.OpenFile(*eventLogPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		log.Panicln(err)
