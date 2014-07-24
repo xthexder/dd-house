@@ -295,16 +295,22 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	parseEvents(data["events"].(map[string]interface{}))
 	delete(data, "events")
 
+	agentChecks, ok := data["agent_checks"]
+	if ok {
+		metrics = append(metrics, mapAgentChecks(host, timestamp, agentChecks.([]interface{}))...)
+		delete(data, "agent_checks")
+	}
+
 	metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
 	delete(data, "processes")
 	delete(data, "resources") // Only ever contains process data that is already collected above
 	metrics = append(metrics, mapServiceChecks(data["service_checks"].([]interface{}))...)
 	delete(data, "service_checks")
-	metrics = append(metrics, mapDiskMetrics("system.disk", timestamp, host, data["diskUsage"].([]interface{})))
+	metrics = append(metrics, mapDiskMetrics("system.disk", host, timestamp, data["diskUsage"].([]interface{})))
 	delete(data, "diskUsage")
-	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", timestamp, host, data["inodes"].([]interface{})))
+	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", host, timestamp, data["inodes"].([]interface{})))
 	delete(data, "inodes")
-	metrics = append(metrics, mapIOMetrics(timestamp, host, data["ioStats"].(map[string]interface{})))
+	metrics = append(metrics, mapIOMetrics(host, timestamp, data["ioStats"].(map[string]interface{})))
 	delete(data, "ioStats")
 	metrics = append(metrics, mapExtraMetrics(host, data["metrics"].([]interface{}))...)
 	delete(data, "metrics")
@@ -333,7 +339,9 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 			}
 			hostTags[k] = strings.Join(tags, ",")
 		}
-		metrics = append(metrics, NewMetricGroup(host, "host.meta.tags", timestamp, nil, hostTags))
+		if len(hostTags) > 0 {
+			metrics = append(metrics, NewMetricGroup(host, "host.meta.tags", timestamp, nil, hostTags))
+		}
 
 		systemStats := data["systemStats"].(map[string]interface{})
 		for k, v := range systemStats {
@@ -376,7 +384,33 @@ func mapServiceChecks(data []interface{}) []*Metric {
 	return metrics
 }
 
-func mapDiskMetrics(name string, timestamp uint64, host string, data []interface{}) *Metric {
+func mapAgentChecks(host string, timestamp uint64, data []interface{}) []*Metric {
+	metrics := []*Metric{}
+	for _, check := range data {
+		values := check.([]interface{})
+		name := "check." + values[1].(string) + "." + values[0].(string)
+		new_values := make(map[string]interface{})
+		new_values["instance_id"] = values[2].(float64)
+		new_values["status"] = values[3].(string)
+		message := ""
+		messages, ok := values[4].([]interface{})
+		if ok {
+			for _, msg := range messages {
+				if len(message) > 0 {
+					message += "\n"
+				}
+				message += msg.(string)
+			}
+		} else {
+			message = values[4].(string)
+		}
+		new_values["message"] = message
+		metrics = append(metrics, NewMetricGroup(host, name, timestamp, new_values, nil))
+	}
+	return metrics
+}
+
+func mapDiskMetrics(name string, host string, timestamp uint64, data []interface{}) *Metric {
 	columns := append([]string{"time", "hostname"}, diskMetrics...)
 	points := make([][]interface{}, len(data))
 
@@ -394,7 +428,7 @@ func mapDiskMetrics(name string, timestamp uint64, host string, data []interface
 	return metric
 }
 
-func mapIOMetrics(timestamp uint64, host string, data map[string]interface{}) *Metric {
+func mapIOMetrics(host string, timestamp uint64, data map[string]interface{}) *Metric {
 	columns := append([]string{"time", "hostname", "device"}, ioMetrics...)
 	points := [][]interface{}{}
 
