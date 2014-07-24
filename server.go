@@ -17,6 +17,7 @@ import (
 
 var port = flag.Int("port", 8080, "which port to listen on")
 var eventLogPath = flag.String("events", "events.log", "the file to log events to")
+var processFilter = flag.Float64("ps-filter", 0.1, "only log processes using more than this % of a resource")
 var authApiKey string
 var dbUrl string
 
@@ -495,7 +496,9 @@ func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
 	columns := append([]string{"time", "hostname"}, aggregateProcessMetrics...)
 	points := [][]interface{}{}
 	for _, process := range aggregate {
-		points = append(points, append([]interface{}{timestamp, host}, process...))
+		if process[2].(float64) >= *processFilter || process[3].(float64) >= *processFilter {
+			points = append(points, append([]interface{}{timestamp, host}, process...))
+		}
 	}
 	metric := &Metric{"processes", columns, points}
 	return metric
