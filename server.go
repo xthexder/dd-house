@@ -66,6 +66,17 @@ var processMetrics = []string{
 	"running_time",
 	"command",
 }
+var aggregateProcessMetrics = []string{
+	"user",
+	"pid",
+	"pct_cpu",
+	"pct_mem",
+	"vsz",
+	"rss",
+	"family",
+	"command",
+	"ps_count",
+}
 
 var diskMetrics = []string{
 	"device",
@@ -315,32 +326,49 @@ func mapIOMetrics(timestamp uint64, host string, data map[string]interface{}) *M
 }
 
 func GetProcessFamily(command string) string {
-	if len(command) > 0 && command[0] == '[' {
-		return "kernel"
-	} else {
-		prefix := command
-		index := strings.IndexAny(command, " \t")
-		if index > 0 {
-			prefix = command[:index]
-		}
-		index = strings.LastIndex(prefix, "/")
-		return prefix[index+1:]
+	prefix := command
+	index := strings.IndexAny(command, " \t")
+	if index > 0 {
+		prefix = command[:index]
 	}
+	index = strings.LastIndex(prefix, "/")
+	return prefix[index+1:]
 }
 
 func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
 	host := data["host"].(string)
 	processes := data["processes"].([]interface{})
-	columns := append([]string{"time", "hostname", "family"}, processMetrics...)
-	points := make([][]interface{}, len(processes))
-	for i, process := range processes {
+	aggregate := make(map[string][]interface{})
+	for _, process := range processes {
 		fields := process.([]interface{})
-		fields[1], _ = strconv.ParseInt(fields[1].(string), 10, 64)
-		fields[2], _ = strconv.ParseFloat(fields[2].(string), 64)
-		fields[3], _ = strconv.ParseFloat(fields[3].(string), 64)
-		fields[4], _ = strconv.ParseInt(fields[4].(string), 10, 64)
-		fields[5], _ = strconv.ParseInt(fields[5].(string), 10, 64)
-		points[i] = append([]interface{}{timestamp, host, GetProcessFamily(fields[10].(string))}, fields...)
+		command := fields[10].(string)
+		family := "kernel"
+		aggr := "kernel"
+		if len(command) == 0 || command[0] != '[' {
+			family = GetProcessFamily(command)
+			aggr = command
+		}
+		result, ok := aggregate[aggr]
+		if !ok {
+			result = make([]interface{}, len(aggregateProcessMetrics))
+			result[8] = 0
+			aggregate[aggr] = result
+		}
+
+		result[0] = fields[0].(string)
+		result[1], _ = strconv.ParseInt(fields[1].(string), 10, 64)
+		result[2], _ = strconv.ParseFloat(fields[2].(string), 64)
+		result[3], _ = strconv.ParseFloat(fields[3].(string), 64)
+		result[4], _ = strconv.ParseInt(fields[4].(string), 10, 64)
+		result[5], _ = strconv.ParseInt(fields[5].(string), 10, 64)
+		result[6] = family
+		result[7] = command
+		result[8] = result[8].(int) + 1
+	}
+	columns := append([]string{"time", "hostname"}, aggregateProcessMetrics...)
+	points := [][]interface{}{}
+	for _, process := range aggregate {
+		points = append(points, append([]interface{}{timestamp, host}, process...))
 	}
 	metric := &Metric{"processes", columns, points}
 	return metric
