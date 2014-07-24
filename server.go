@@ -250,6 +250,8 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 		metrics[i] = &Metric{"statsd." + metric.Metric, columns, points}
 	}
 
+	log.Printf("Parsed statsd for: %s\n", host)
+
 	for _, metric := range metrics {
 		for _, points := range metric.Points {
 			if len(points[2].(string)) == 0 {
@@ -296,6 +298,8 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
 	delete(data, "processes")
 	delete(data, "resources") // Only ever contains process data that is already collected above
+	metrics = append(metrics, mapServiceChecks(data["service_checks"].([]interface{}))...)
+	delete(data, "service_checks")
 	metrics = append(metrics, mapDiskMetrics("system.disk", timestamp, host, data["diskUsage"].([]interface{})))
 	delete(data, "diskUsage")
 	metrics = append(metrics, mapDiskMetrics("system.fs.inodes", timestamp, host, data["inodes"].([]interface{})))
@@ -305,9 +309,11 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	metrics = append(metrics, mapExtraMetrics(host, data["metrics"].([]interface{}))...)
 	delete(data, "metrics")
 
-	debug, err := json.MarshalIndent(data, "", "  ")
-	if err == nil {
-		fmt.Println(string(debug))
+	if len(data) > 0 {
+		debug, err := json.MarshalIndent(data, "", "  ")
+		if err == nil {
+			fmt.Println("Unprocessed metrics:", string(debug))
+		}
 	}
 	return metrics
 }
@@ -347,6 +353,26 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 	}
 	delete(data, "host-tags")
 
+	return metrics
+}
+
+func mapServiceChecks(data []interface{}) []*Metric {
+	metrics := []*Metric{}
+	for _, check := range data {
+		values := check.(map[string]interface{})
+		host := values["host_name"].(string)
+		name := "service." + values["check"].(string)
+		timestamp := uint64(values["timestamp"].(float64) * 1000)
+		var tags map[string]interface{}
+		if values["tags"] != nil {
+			tags = values["tags"].(map[string]interface{})
+		}
+		delete(values, "check")
+		delete(values, "tags")
+		delete(values, "host_name")
+		delete(values, "timestamp")
+		metrics = append(metrics, NewMetricGroup(host, name, timestamp, values, tags))
+	}
 	return metrics
 }
 
@@ -507,8 +533,6 @@ func handleIntake(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Println(req.Method, req.URL.Path)
-
 	body := req.Body
 	if req.Header.Get("Content-Encoding") == "deflate" {
 		var err error
@@ -546,8 +570,6 @@ func handleApi(w http.ResponseWriter, req *http.Request) {
 	if handleApiKey(w, req) {
 		return
 	}
-
-	log.Println(req.Method, req.URL.Path)
 
 	body := req.Body
 	if req.Header.Get("Content-Encoding") == "deflate" {
