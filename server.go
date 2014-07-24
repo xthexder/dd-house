@@ -67,6 +67,19 @@ type Metric struct {
 	Points  [][]interface{} `json:"points"`
 }
 
+type StatsdSeries struct {
+	Series []*StatsdMetric `json:"series"`
+}
+
+type StatsdMetric struct {
+	Tags     []string        `json:"tags"`
+	Metric   string          `json:"metric"`
+	Interval float64         `json:"interval"`
+	Host     string          `json:"host"`
+	Points   [][]interface{} `json:"points"`
+	Type     string          `json:"type"`
+}
+
 func NewMetric(host, name string, timestamp uint64, value interface{}, tags map[string]string) *Metric {
 	columns := []string{"time", "value", "hostname"}
 	points := [][]interface{}{{timestamp, value, host}}
@@ -121,6 +134,45 @@ func PushMetrics(metrics []*Metric) {
 	} else if resp.StatusCode != 200 {
 		log.Println("Got Response: ", resp.Status)
 	}
+}
+
+func mapStatsd(series []*StatsdMetric) []*Metric {
+	metrics := make([]*Metric, len(series))
+	host := ""
+	for i, metric := range series {
+		if len(metric.Host) > 0 {
+			host = metric.Host
+		}
+		columns := []string{"time", "value", "hostname"}
+		points := metric.Points
+		for i, _ := range points {
+			points[i] = append(points[i], host)
+		}
+		if metric.Tags != nil {
+			for _, tag := range metric.Tags {
+				split := strings.SplitN(tag, ":", 2)
+				if split[0] == "hostname" {
+					for i, _ := range points {
+						points[i][2] = split[1]
+					}
+				} else {
+					columns = append(columns, split[0])
+					for i, _ := range points {
+						points[i] = append(points[i], split[1])
+					}
+				}
+			}
+		}
+		metrics[i] = &Metric{metric.Metric, columns, points}
+	}
+	for _, metric := range metrics {
+		for _, points := range metric.Points {
+			if len(points[2].(string)) == 0 {
+				points[2] = host
+			}
+		}
+	}
+	return metrics
 }
 
 func mapMetrics(data map[string]interface{}) []*Metric {
@@ -242,9 +294,18 @@ func handleApi(w http.ResponseWriter, req *http.Request) {
 		log.Println(err)
 		io.WriteString(w, `{"status":"failed"}`)
 		return
-	} else {
-		log.Println(buf.String())
 	}
+
+	series := StatsdSeries{}
+	err = json.Unmarshal(buf.Bytes(), &series)
+	if err != nil {
+		log.Println(err)
+		io.WriteString(w, `{"status":"failed"}`)
+		return
+	}
+
+	metrics := mapStatsd(series.Series)
+	go PushMetrics(metrics)
 
 	w.Header().Set("Content-Type", "application/json")
 	io.WriteString(w, `{"status":"ok"}`)
