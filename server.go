@@ -168,7 +168,7 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 				}
 			}
 		}
-		metrics[i] = &Metric{metric.Metric, columns, points}
+		metrics[i] = &Metric{"statsd." + metric.Metric, columns, points}
 	}
 	for _, metric := range metrics {
 		for _, points := range metric.Points {
@@ -239,23 +239,44 @@ func mapDiskMetrics(name string, timestamp uint64, host string, data []interface
 }
 
 func mapExtraMetrics(host string, data []interface{}) []*Metric {
-	metrics := make([]*Metric, len(data))
-	for i, tmp := range data {
+	values := make(map[string]map[string]interface{})
+	tags := make(map[string]map[string]string)
+	timestamps := make(map[string]uint64)
+	for _, tmp := range data {
 		metric := tmp.([]interface{})
-		tags := make(map[string]string)
+		name := metric[0].(string)
+		timestamp := uint64(metric[1].(float64) * 1000)
+		value := metric[2]
+
+		index := strings.LastIndexAny(name, ".")
+		group_name := name[:index]
+		group := values[group_name]
+		group_tags := tags[group_name]
+		if group == nil {
+			group = make(map[string]interface{})
+			group_tags = make(map[string]string)
+			values[group_name] = group
+			tags[group_name] = group_tags
+		}
+		timestamps[group_name] = timestamp
+		group[name[index+1:]] = value
+
 		fields := metric[3].(map[string]interface{})
 		for k, v := range fields {
 			if k == "tags" {
 				tags2 := v.([]interface{})
 				for _, tag := range tags2 {
 					split := strings.SplitN(tag.(string), ":", 2)
-					tags[split[0]] = split[1]
+					group_tags[split[0]] = split[1]
 				}
 			} else {
-				tags[k] = v.(string)
+				group_tags[k] = v.(string)
 			}
 		}
-		metrics[i] = NewMetric(host, metric[0].(string), uint64(metric[1].(float64)*1000), metric[2], tags)
+	}
+	metrics := []*Metric{}
+	for name, group := range values {
+		metrics = append(metrics, NewMetricGroup(host, name, timestamps[name], group, tags[name]))
 	}
 	return metrics
 }
