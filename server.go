@@ -169,6 +169,15 @@ func PushMetrics(metrics []*Metric) {
 	}
 }
 
+func GroupMetric(name string) (string, string) {
+	split := strings.SplitN(name, ".", 3)
+	if len(split) > 2 {
+		return split[0] + "." + split[1], split[2]
+	} else {
+		return split[0], split[1]
+	}
+}
+
 func mapStatsd(series []*StatsdMetric) []*Metric {
 	metrics := make([]*Metric, len(series))
 	host := ""
@@ -228,14 +237,13 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 	for key, value := range data {
 		name, ok := rootMetrics[key]
 		if ok {
-			index := strings.LastIndexAny(name, ".")
-			group_name := name[:index]
+			group_name, field_name := GroupMetric(name)
 			group := values[group_name]
 			if group == nil {
 				group = make(map[string]interface{})
 				values[group_name] = group
 			}
-			group[name[index+1:]] = value
+			group[field_name] = value
 			delete(data, key)
 		}
 	}
@@ -300,8 +308,7 @@ func mapExtraMetrics(host string, data []interface{}) []*Metric {
 		timestamp := uint64(metric[1].(float64) * 1000)
 		value := metric[2]
 
-		index := strings.LastIndexAny(name, ".")
-		group_name := name[:index]
+		group_name, field_name := GroupMetric(name)
 		group := values[group_name]
 		group_tags := tags[group_name]
 		if group == nil {
@@ -311,7 +318,7 @@ func mapExtraMetrics(host string, data []interface{}) []*Metric {
 			tags[group_name] = group_tags
 		}
 		timestamps[group_name] = timestamp
-		group[name[index+1:]] = value
+		group[field_name] = value
 
 		fields := metric[3].(map[string]interface{})
 		for k, v := range fields {
