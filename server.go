@@ -146,6 +146,7 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 		columns := []string{"time", "value", "hostname"}
 		points := metric.Points
 		for i, _ := range points {
+			points[i][0] = uint64(points[i][0].(float64) * 1000)
 			points[i] = append(points[i], host)
 		}
 		columns = append(columns, "metric_interval", "metric_type")
