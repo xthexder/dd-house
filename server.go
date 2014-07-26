@@ -154,7 +154,11 @@ func NewMetric(host, name string, timestamp uint64, value interface{}, tags map[
 			if k == "hostname" {
 				points[0][2] = v
 			} else {
-				columns = append(columns, k)
+				if k == "time" || k == "value" {
+					columns = append(columns, "_"+k)
+				} else {
+					columns = append(columns, k)
+				}
 				points[0] = append(points[0], v)
 			}
 		}
@@ -167,7 +171,11 @@ func NewMetricGroup(host, name string, timestamp uint64, values map[string]inter
 	points := [][]interface{}{{timestamp, host}}
 	if values != nil {
 		for k, v := range values {
-			columns = append(columns, k)
+			if k == "time" || k == "hostname" {
+				columns = append(columns, "_"+k)
+			} else {
+				columns = append(columns, k)
+			}
 			points[0] = append(points[0], v)
 		}
 	}
@@ -177,7 +185,11 @@ func NewMetricGroup(host, name string, timestamp uint64, values map[string]inter
 			if k == "hostname" {
 				points[0][1] = v
 			} else {
-				columns = append(columns, k)
+				if k == "time" {
+					columns = append(columns, "_"+k)
+				} else {
+					columns = append(columns, k)
+				}
 				points[0] = append(points[0], v)
 			}
 		}
@@ -244,7 +256,11 @@ func mapStatsd(series []*StatsdMetric) []*Metric {
 						points[i][2] = split[1]
 					}
 				} else {
-					columns = append(columns, split[0])
+					if split[0] == "time" || split[0] == "value" {
+						columns = append(columns, "_"+split[0])
+					} else {
+						columns = append(columns, split[0])
+					}
 					for i, _ := range points {
 						points[i] = append(points[i], split[1])
 					}
