@@ -375,6 +375,13 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 	return metrics
 }
 
+func addTagsArrayToMap(dest map[string]interface{}, src []interface{}) {
+	for _, tag := range src {
+		split := strings.SplitN(tag.(string), ":", 2)
+		dest[split[0]] = split[1]
+	}
+}
+
 func mapServiceChecks(data []interface{}) []*Metric {
 	metrics := []*Metric{}
 	for _, check := range data {
@@ -384,7 +391,8 @@ func mapServiceChecks(data []interface{}) []*Metric {
 		timestamp := uint64(values["timestamp"].(float64) * 1000)
 		var tags map[string]interface{}
 		if values["tags"] != nil {
-			tags = values["tags"].(map[string]interface{})
+			tags = make(map[string]interface{})
+			addTagsArrayToMap(tags, values["tags"].([]interface{}))
 		}
 		delete(values, "check")
 		delete(values, "tags")
@@ -564,11 +572,7 @@ func addToExtraMetric(metric *ExtraMetric, value interface{}, tags map[string]in
 	metric.Values = append(metric.Values, value)
 	for k, v := range tags {
 		if k == "tags" {
-			tags2 := v.([]interface{})
-			for _, tag := range tags2 {
-				split := strings.SplitN(tag.(string), ":", 2)
-				tags[split[0]] = split[1]
-			}
+			addTagsArrayToMap(tags, v.([]interface{}))
 			delete(tags, "tags")
 		}
 	}
