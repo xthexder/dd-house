@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -15,16 +14,18 @@ import (
 	"strings"
 )
 
-var port = flag.Int("port", 8080, "which port to listen on")
-var eventLogPath = flag.String("events", "events.log", "the file to log events to")
-var processFilter = flag.Float64("ps-filter", 0.1, "only log processes using more than this % of a resource")
-var authApiKey string
-var dbUrl string
-var seriesUrl string
-var dbName string
+var (
+	listenAddr    string
+	eventLogPath  string
+	processFilter float64
+	authApiKey    string
+	dbUrl         string
+	seriesUrl     string
+	dbName        string
 
-var eventLog *os.File
-var eventsChan chan []byte
+	eventLog   *os.File
+	eventsChan chan []byte
+)
 
 var rootMetrics = map[string]string{
 	"agentVersion": "host.meta.agent_version",
@@ -515,7 +516,7 @@ func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
 	columns := append([]string{"time", "hostname"}, aggregateProcessMetrics...)
 	points := [][]interface{}{}
 	for _, process := range aggregate {
-		if process[2].(float64) >= *processFilter || process[3].(float64) >= *processFilter {
+		if process[2].(float64) >= processFilter || process[3].(float64) >= processFilter {
 			points = append(points, append([]interface{}{timestamp, host}, process...))
 		}
 	}
@@ -739,10 +740,28 @@ func CreateDBIfNotExists() error {
 }
 
 func main() {
-	flag.Parse()
+	listenAddr = os.Getenv("ADDR")
+	if len(listenAddr) == 0 {
+		listenAddr = ":8080"
+	}
+	eventLogPath = os.Getenv("EVENT_LOG")
+	if len(eventLogPath) == 0 {
+		eventLogPath = "events.log"
+	}
+	processFilterString := os.Getenv("PS_FILTER")
+	if len(processFilterString) == 0 {
+		processFilter = 0.1
+	} else {
+		var err error
+		processFilter, err = strconv.ParseFloat(processFilterString, 64)
+		if err != nil {
+			log.Panicln(err)
+		}
+	}
+
 	authApiKey = os.Getenv("API_KEY")
 	if len(authApiKey) == 0 {
-		log.Println("Warning: API_KEY is blank")
+		log.Println("Warning: API_KEY is blank, any key is accepted")
 	}
 	inputUrl := os.Getenv("DB_URL")
 	if len(inputUrl) == 0 {
@@ -761,7 +780,7 @@ func main() {
 		log.Panicln(err)
 	}
 
-	eventLog, err = os.OpenFile(*eventLogPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	eventLog, err = os.OpenFile(eventLogPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -769,9 +788,9 @@ func main() {
 
 	go writeEvents()
 
-	log.Println("dd-house listening on", *port)
+	log.Println("dd-house listening on", listenAddr)
 
 	http.HandleFunc("/intake", handleIntake)
 	http.HandleFunc("/api/v1/series/", handleApi)
-	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(*port), nil))
+	log.Fatal(http.ListenAndServe(listenAddr, nil))
 }
