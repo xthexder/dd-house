@@ -145,27 +145,6 @@ type StatsdMetric struct {
 	Type     string          `json:"type"`
 }
 
-func NewMetric(host, name string, timestamp uint64, value interface{}, tags map[string]interface{}) *Metric {
-	columns := []string{"time", "value", "hostname"}
-	points := [][]interface{}{{timestamp, value, host}}
-
-	if tags != nil {
-		for k, v := range tags {
-			if k == "hostname" {
-				points[0][2] = v
-			} else {
-				if k == "time" || k == "value" {
-					columns = append(columns, "_"+k)
-				} else {
-					columns = append(columns, k)
-				}
-				points[0] = append(points[0], v)
-			}
-		}
-	}
-	return &Metric{name, columns, points}
-}
-
 func NewMetricGroup(host, name string, timestamp uint64, values map[string]interface{}, tags map[string]interface{}) *Metric {
 	columns := []string{"time", "hostname"}
 	points := [][]interface{}{{timestamp, host}}
@@ -214,7 +193,7 @@ func PushMetrics(metrics []*Metric) {
 		log.Println(err)
 	} else if resp.StatusCode != 200 {
 		dump, _ := httputil.DumpResponse(resp, true)
-		log.Printf("Got Response: %s\n%s\n\n\n%s", resp.Status, body, string(dump))
+		log.Printf("Got Response: %s\n%s\n\n\n%s", resp.Status, string(body), string(dump))
 	}
 }
 
@@ -540,46 +519,103 @@ func mapProcesses(timestamp uint64, data map[string]interface{}) *Metric {
 	return metric
 }
 
+type ExtraMetric struct {
+	Values    []interface{}
+	Tags      []map[string]interface{}
+	Timestamp uint64
+}
+
+func (self *ExtraMetric) ToMetric(host, name string) *Metric {
+	columns := []string{"time", "value", "hostname"}
+	points := make([][]interface{}, len(self.Values))
+	for i, value := range self.Values {
+		points[i] = []interface{}{self.Timestamp, value, host}
+	}
+
+	for i, tags := range self.Tags {
+		for k, v := range tags {
+			if k == "time" || k == "value" {
+				k = "_" + k
+			}
+			found := false
+			for j, column := range columns {
+				if column == k {
+					points[i][j] = v
+					found = true
+					break
+				}
+			}
+			if !found {
+				columns = append(columns, k)
+				for j, _ := range points {
+					if j == i {
+						points[j] = append(points[j], v)
+					} else {
+						points[j] = append(points[j], nil)
+					}
+				}
+			}
+		}
+	}
+	return &Metric{name, columns, points}
+}
+
+func addToExtraMetric(metric *ExtraMetric, value interface{}, tags map[string]interface{}) {
+	metric.Values = append(metric.Values, value)
+	for k, v := range tags {
+		if k == "tags" {
+			tags2 := v.([]interface{})
+			for _, tag := range tags2 {
+				split := strings.SplitN(tag.(string), ":", 2)
+				tags[split[0]] = split[1]
+			}
+			delete(tags, "tags")
+		}
+	}
+	metric.Tags = append(metric.Tags, tags)
+}
+
 func mapExtraMetrics(host string, data []interface{}) []*Metric {
-	values := make(map[string]map[string]interface{})
-	tags := make(map[string]map[string]interface{})
-	timestamps := make(map[string]uint64)
+	groups := make(map[string]map[string]*ExtraMetric)
 
 	for _, tmp := range data {
 		metric := tmp.([]interface{})
 		name := metric[0].(string)
 		timestamp := uint64(metric[1].(float64) * 1000)
-		value := metric[2]
 
 		group_name, field_name := GroupMetric(name)
-		group := values[group_name]
-		group_tags := tags[group_name]
-		if group == nil {
-			group = make(map[string]interface{})
-			group_tags = make(map[string]interface{})
-			values[group_name] = group
-			tags[group_name] = group_tags
+		group, ok := groups[group_name]
+		if !ok {
+			group = make(map[string]*ExtraMetric)
+			groups[group_name] = group
 		}
-		timestamps[group_name] = timestamp
-		group[field_name] = value
-
-		fields := metric[3].(map[string]interface{})
-		for k, v := range fields {
-			if k == "tags" {
-				tags2 := v.([]interface{})
-				for _, tag := range tags2 {
-					split := strings.SplitN(tag.(string), ":", 2)
-					group_tags[split[0]] = split[1]
-				}
-			} else {
-				group_tags[k] = v.(string)
-			}
+		extraMetric, ok := group[field_name]
+		if !ok {
+			extraMetric = &ExtraMetric{[]interface{}{}, []map[string]interface{}{}, timestamp}
+			group[field_name] = extraMetric
 		}
+		addToExtraMetric(extraMetric, metric[2], metric[3].(map[string]interface{}))
 	}
 
 	metrics := []*Metric{}
-	for name, group := range values {
-		metrics = append(metrics, NewMetricGroup(host, name, timestamps[name], group, tags[name]))
+	for group_name, group := range groups {
+		groupValues := make(map[string]interface{})
+		groupTags := make(map[string]interface{})
+		var groupTimestamp uint64
+		for field_name, extraMetric := range group {
+			if len(extraMetric.Values) > 1 {
+				metrics = append(metrics, extraMetric.ToMetric(host, group_name+"."+field_name))
+			} else {
+				groupValues[field_name] = extraMetric.Values[0]
+				for k, v := range extraMetric.Tags[0] {
+					groupTags[k] = v
+				}
+				groupTimestamp = extraMetric.Timestamp
+			}
+		}
+		if len(groupValues) > 0 {
+			metrics = append(metrics, NewMetricGroup(host, group_name, groupTimestamp, groupValues, groupTags))
+		}
 	}
 	return metrics
 }
@@ -749,7 +785,7 @@ func CreateDBIfNotExists() error {
 		return err
 	} else if resp.StatusCode != 201 {
 		dump, _ := httputil.DumpResponse(resp, true)
-		log.Printf("Got Response: %s\n%s\n\n\n%s", resp.Status, body, string(dump))
+		log.Printf("Got Response: %s\n%s\n\n\n%s", resp.Status, string(body), string(dump))
 	}
 
 	return nil
