@@ -340,7 +340,11 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 	meta, ok := data["meta"]
 	if ok {
 		metrics = append(metrics, NewMetricGroup(host, "host.meta.hostnames", timestamp, nil, meta.(map[string]interface{})))
+		delete(data, "meta")
+	}
 
+	_, ok = data["host-tags"]
+	if ok {
 		hostTags := data["host-tags"].(map[string]interface{})
 		for k, v := range hostTags {
 			tmp := v.([]interface{})
@@ -353,7 +357,11 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 		if len(hostTags) > 0 {
 			metrics = append(metrics, NewMetricGroup(host, "host.meta.tags", timestamp, nil, hostTags))
 		}
+		delete(data, "host-tags")
+	}
 
+	_, ok = data["systemStats"]
+	if ok {
 		systemStats := data["systemStats"].(map[string]interface{})
 		for k, v := range systemStats {
 			tmp, ok := v.([]interface{})
@@ -366,11 +374,8 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 			}
 		}
 		metrics = append(metrics, NewMetricGroup(host, "host.meta.stats", timestamp, systemStats, nil))
-
-		delete(data, "meta")
 		delete(data, "systemStats")
 	}
-	delete(data, "host-tags")
 
 	return metrics
 }
