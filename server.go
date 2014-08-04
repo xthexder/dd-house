@@ -305,15 +305,23 @@ func mapMetrics(data map[string]interface{}) []*Metric {
 			delete(data, "agent_checks")
 		}
 
-		metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
-		delete(data, "processes")
+		if data["processes"] != nil {
+			metrics = append(metrics, mapProcesses(timestamp, data["processes"].(map[string]interface{})))
+			delete(data, "processes")
+		}
 		delete(data, "resources") // Only ever contains process data that is already collected above
-		metrics = append(metrics, mapDiskMetrics("system.disk", host, timestamp, data["diskUsage"].([]interface{})))
-		delete(data, "diskUsage")
-		metrics = append(metrics, mapDiskMetrics("system.fs.inodes", host, timestamp, data["inodes"].([]interface{})))
-		delete(data, "inodes")
-		metrics = append(metrics, mapIOMetrics(host, timestamp, data["ioStats"].(map[string]interface{})))
-		delete(data, "ioStats")
+		if data["diskUsage"] != nil {
+			metrics = append(metrics, mapDiskMetrics("system.disk", host, timestamp, data["diskUsage"].([]interface{})))
+			delete(data, "diskUsage")
+		}
+		if data["inodes"] != nil {
+			metrics = append(metrics, mapDiskMetrics("system.fs.inodes", host, timestamp, data["inodes"].([]interface{})))
+			delete(data, "inodes")
+		}
+		if data["ioStats"] != nil {
+			metrics = append(metrics, mapIOMetrics(host, timestamp, data["ioStats"].(map[string]interface{})))
+			delete(data, "ioStats")
+		}
 	} else {
 		delete(data, "uuid")
 	}
@@ -343,8 +351,7 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 		delete(data, "meta")
 	}
 
-	_, ok = data["host-tags"]
-	if ok {
+	if data["host-tags"] != nil {
 		hostTags := data["host-tags"].(map[string]interface{})
 		for k, v := range hostTags {
 			tmp := v.([]interface{})
@@ -360,8 +367,7 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 		delete(data, "host-tags")
 	}
 
-	_, ok = data["systemStats"]
-	if ok {
+	if data["systemStats"] != nil {
 		systemStats := data["systemStats"].(map[string]interface{})
 		for k, v := range systemStats {
 			tmp, ok := v.([]interface{})
