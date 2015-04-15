@@ -40,6 +40,8 @@ var rootMetrics = map[string]string{
 	"system.load.norm.5":  "system.load.norm.5",
 	"system.load.norm.15": "system.load.norm.15",
 
+	"system.uptime": "system.uptime",
+
 	"cpuIdle":   "system.cpu.idle",
 	"cpuUser":   "system.cpu.user",
 	"cpuWait":   "system.cpu.iowait",
@@ -365,6 +367,22 @@ func mapMetadata(host string, timestamp uint64, data map[string]interface{}) []*
 			metrics = append(metrics, NewMetricGroup(host, "host.meta.tags", timestamp, nil, hostTags))
 		}
 		delete(data, "host-tags")
+	}
+
+	if data["external_host_tags"] != nil {
+		hostTags := data["external_host_tags"].(map[string]interface{})
+		for k, v := range hostTags {
+			tmp := v.([]interface{})
+			tags := make([]string, len(tmp))
+			for i, tag := range tmp {
+				tags[i] = tag.(string)
+			}
+			hostTags[k] = strings.Join(tags, ",")
+		}
+		if len(hostTags) > 0 {
+			metrics = append(metrics, NewMetricGroup(host, "host.meta.tags.external", timestamp, nil, hostTags))
+		}
+		delete(data, "external_host_tags")
 	}
 
 	if data["systemStats"] != nil {
